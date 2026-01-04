@@ -158,13 +158,31 @@ trait VitsModelCommons {
     fn get_speaker_map(&self) -> &HashMap<i64, String>;
     fn get_meta_ids(&self) -> (i64, i64, i64) {
         let config = self.get_config();
-        let pad_id = *config.phoneme_id_map.get(&PAD).unwrap().first().unwrap();
-        let bos_id = *config.phoneme_id_map.get(&BOS).unwrap().first().unwrap();
-        let eos_id = *config.phoneme_id_map.get(&EOS).unwrap().first().unwrap();
+        let pad_id = *config
+            .phoneme_id_map
+            .get(&PAD)
+            .expect("PAD phoneme not found")
+            .first()
+            .expect("PAD has no id");
+        let bos_id = *config
+            .phoneme_id_map
+            .get(&BOS)
+            .expect("BOS phoneme not found")
+            .first()
+            .expect("BOS has no id");
+        let eos_id = *config
+            .phoneme_id_map
+            .get(&EOS)
+            .expect("EOS phoneme not found")
+            .first()
+            .expect("EOS has no id");
         (pad_id, bos_id, eos_id)
     }
     fn set_speaker(&self, sid: i64) -> Option<PiperError> {
-        let mut synth_config = self.get_synth_config().write().unwrap();
+        let mut synth_config = self
+            .get_synth_config()
+            .write()
+            .expect("Failed to acquire write lock");
 
         if self.get_speaker_map().contains_key(&sid) {
             synth_config.speaker = Some(sid);
@@ -195,7 +213,10 @@ trait VitsModelCommons {
     }
 
     fn _do_set_default_synth_config(&self, new_config: &PiperSynthesisConfig) -> PiperResult<()> {
-        let mut synth_config = self.get_synth_config().write().unwrap();
+        let mut synth_config = self
+            .get_synth_config()
+            .write()
+            .expect("Failed to acquire write lock");
         synth_config.length_scale = new_config.length_scale;
         synth_config.noise_scale = new_config.noise_scale;
         synth_config.noise_w = new_config.noise_w;
@@ -223,7 +244,7 @@ trait VitsModelCommons {
         phoneme_ids.push(bos_id);
         for phoneme in phonemes.chars() {
             if let Some(id) = config.phoneme_id_map.get(&phoneme) {
-                phoneme_ids.push(*id.first().unwrap());
+                phoneme_ids.push(*id.first().expect("Phoneme has no id"));
                 phoneme_ids.push(pad_id);
             }
         }
@@ -292,10 +313,14 @@ impl VitsModel {
         })
     }
     fn infer_with_values(&self, input_phonemes: Vec<i64>) -> PiperAudioResult {
-        let synth_config = self.synth_config.read().unwrap();
+        let synth_config = self
+            .synth_config
+            .read()
+            .expect("Failed to acquire read lock");
 
         let input_len = input_phonemes.len();
-        let phoneme_inputs = Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap();
+        let phoneme_inputs = Array2::<i64>::from_shape_vec((1, input_len), input_phonemes)
+            .expect("Failed to create phoneme input array");
         let input_lengths = Array1::<i64>::from_iter([input_len as i64]);
         let scales = Array1::<f32>::from_iter([
             synth_config.noise_scale,
@@ -309,17 +334,26 @@ impl VitsModel {
             None
         };
 
-        let mut session = self.session.lock().unwrap();
+        let mut session = self
+            .session
+            .lock()
+            .expect("Failed to acquire lock on session");
         let timer = std::time::Instant::now();
         let outputs = {
             let mut inputs = vec![
-                SessionInputValue::from(Value::from_array(phoneme_inputs).unwrap()),
-                SessionInputValue::from(Value::from_array(input_lengths).unwrap()),
-                SessionInputValue::from(Value::from_array(scales).unwrap()),
+                SessionInputValue::from(
+                    Value::from_array(phoneme_inputs).expect("Failed to create tensor"),
+                ),
+                SessionInputValue::from(
+                    Value::from_array(input_lengths).expect("Failed to create tensor"),
+                ),
+                SessionInputValue::from(
+                    Value::from_array(scales).expect("Failed to create tensor"),
+                ),
             ];
             if let Some(sid_tensor) = speaker_id {
                 inputs.push(SessionInputValue::from(
-                    Value::from_array(sid_tensor).unwrap(),
+                    Value::from_array(sid_tensor).expect("Failed to create tensor"),
                 ));
             }
             match session.run(SessionInputs::from(inputs.as_slice())) {
@@ -344,7 +378,12 @@ impl VitsModel {
             }
         };
 
-        let audio = Vec::from(outputs.view().as_slice().unwrap());
+        let audio = Vec::from(
+            outputs
+                .view()
+                .as_slice()
+                .expect("Failed to convert audio tensor to slice"),
+        );
 
         Ok(Audio::new(
             audio.into(),
@@ -402,7 +441,12 @@ impl PiperModel for VitsModel {
         }))
     }
     fn get_fallback_synthesis_config(&self) -> PiperResult<Box<dyn Any>> {
-        Ok(Box::new(self.synth_config.read().unwrap().clone()))
+        Ok(Box::new(
+            self.synth_config
+                .read()
+                .expect("Failed to acquire read lock")
+                .clone(),
+        ))
     }
     fn set_fallback_synthesis_config(&self, synthesis_config: &dyn Any) -> PiperResult<()> {
         match synthesis_config.downcast_ref::<PiperSynthesisConfig>() {
@@ -479,7 +523,10 @@ impl VitsStreamingModel {
     fn infer_with_values(&self, input_phonemes: Vec<i64>) -> PiperAudioResult {
         let timer = std::time::Instant::now();
         let mut encoder_output = self.infer_encoder(input_phonemes)?;
-        let mut decoder = self.decoder_model.lock().unwrap();
+        let mut decoder = self
+            .decoder_model
+            .lock()
+            .expect("Failed to acquire lock on decoder");
         let audio = encoder_output.infer_decoder(&mut *decoder)?;
         let inference_ms = timer.elapsed().as_millis() as f32;
         Ok(Audio::new(
@@ -489,10 +536,14 @@ impl VitsStreamingModel {
         ))
     }
     fn infer_encoder(&self, input_phonemes: Vec<i64>) -> PiperResult<EncoderOutputs> {
-        let synth_config = self.synth_config.read().unwrap();
+        let synth_config = self
+            .synth_config
+            .read()
+            .expect("Failed to acquire read lock");
 
         let input_len = input_phonemes.len();
-        let phoneme_inputs = Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap();
+        let phoneme_inputs = Array2::<i64>::from_shape_vec((1, input_len), input_phonemes)
+            .expect("Failed to create phoneme input array");
         let input_lengths = Array1::<i64>::from_iter([input_len as i64]);
 
         let scales = Array1::<f32>::from_iter([
@@ -508,15 +559,22 @@ impl VitsStreamingModel {
             None
         };
 
-        let mut session = self.encoder_model.lock().unwrap();
+        let mut session = self
+            .encoder_model
+            .lock()
+            .expect("Failed to acquire lock on encoder");
         let mut inputs = vec![
-            SessionInputValue::from(Value::from_array(phoneme_inputs).unwrap()),
-            SessionInputValue::from(Value::from_array(input_lengths).unwrap()),
-            SessionInputValue::from(Value::from_array(scales).unwrap()),
+            SessionInputValue::from(
+                Value::from_array(phoneme_inputs).expect("Failed to create tensor"),
+            ),
+            SessionInputValue::from(
+                Value::from_array(input_lengths).expect("Failed to create tensor"),
+            ),
+            SessionInputValue::from(Value::from_array(scales).expect("Failed to create tensor")),
         ];
         if let Some(sid_tensor) = speaker_id {
             inputs.push(SessionInputValue::from(
-                Value::from_array(sid_tensor).unwrap(),
+                Value::from_array(sid_tensor).expect("Failed to create tensor"),
             ));
         }
         let ort_values = session
@@ -572,7 +630,12 @@ impl PiperModel for VitsStreamingModel {
         }))
     }
     fn get_fallback_synthesis_config(&self) -> PiperResult<Box<dyn Any>> {
-        Ok(Box::new(self.synth_config.read().unwrap().clone()))
+        Ok(Box::new(
+            self.synth_config
+                .read()
+                .expect("Failed to acquire read lock")
+                .clone(),
+        ))
     }
     fn set_fallback_synthesis_config(&self, synthesis_config: &dyn Any) -> PiperResult<()> {
         match synthesis_config.downcast_ref::<PiperSynthesisConfig>() {
@@ -695,12 +758,16 @@ impl EncoderOutputs {
     fn infer_decoder(&mut self, session: &mut Session) -> PiperResult<AudioSamples> {
         let outputs = {
             let mut inputs = vec![
-                SessionInputValue::from(Value::from_array(self.z.clone()).unwrap()),
-                SessionInputValue::from(Value::from_array(self.y_mask.clone()).unwrap()),
+                SessionInputValue::from(
+                    Value::from_array(self.z.clone()).expect("Failed to create tensor"),
+                ),
+                SessionInputValue::from(
+                    Value::from_array(self.y_mask.clone()).expect("Failed to create tensor"),
+                ),
             ];
             if !self.g.is_empty() {
                 inputs.push(SessionInputValue::from(
-                    Value::from_array(self.g.clone()).unwrap(),
+                    Value::from_array(self.g.clone()).expect("Failed to create tensor"),
                 ));
             }
             match session.run(SessionInputs::from(inputs.as_slice())) {
@@ -714,7 +781,12 @@ impl EncoderOutputs {
             }
         };
         match outputs[0].try_extract_array::<f32>() {
-            Ok(out) => Ok(Vec::from(out.view().as_slice().unwrap()).into()),
+            Ok(out) => Ok(Vec::from(
+                out.view()
+                    .as_slice()
+                    .expect("Failed to convert audio tensor to slice"),
+            )
+            .into()),
             Err(e) => Err(PiperError::OperationError(format!(
                 "Failed to run model inference. Error: {}",
                 e
@@ -763,13 +835,22 @@ impl SpeechStreamer {
         let g_clone = self.encoder_outputs.g.clone();
 
         let audio = {
-            let mut session = self.decoder_model.lock().unwrap();
+            let mut session = self
+                .decoder_model
+                .lock()
+                .expect("Failed to acquire lock on decoder");
             let mut inputs = vec![
-                SessionInputValue::from(Value::from_array(z_chunk.to_owned()).unwrap()),
-                SessionInputValue::from(Value::from_array(y_mask_chunk.to_owned()).unwrap()),
+                SessionInputValue::from(
+                    Value::from_array(z_chunk.to_owned()).expect("Failed to create tensor"),
+                ),
+                SessionInputValue::from(
+                    Value::from_array(y_mask_chunk.to_owned()).expect("Failed to create tensor"),
+                ),
             ];
             if !g_clone.is_empty() {
-                inputs.push(SessionInputValue::from(Value::from_array(g_clone).unwrap()));
+                inputs.push(SessionInputValue::from(
+                    Value::from_array(g_clone).expect("Failed to create tensor"),
+                ));
             }
             let outputs = session
                 .run(SessionInputs::from(inputs.as_slice()))
@@ -818,7 +899,10 @@ impl Iterator for SpeechStreamer {
         let (mel_index, audio_index) = self.mel_chunker.next()?;
         if self.one_shot {
             self.mel_chunker.consume();
-            let mut decoder = self.decoder_model.lock().unwrap();
+            let mut decoder = self
+                .decoder_model
+                .lock()
+                .expect("Failed to acquire lock on decoder");
             Some(self.encoder_outputs.infer_decoder(&mut *decoder))
         } else {
             Some(self.synthesize_chunk(mel_index, audio_index))
